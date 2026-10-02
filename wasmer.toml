@@ -1,0 +1,21 @@
+[package]
+name = "sambitsabat515-ui/campus-life-os"
+version = "1.0.0"
+description = "Campus Life OS — BPUT Hackathon 2026 unified campus operations platform on Wasmer Edge"
+license = "MIT"
+readme = "README.md"
+
+[dependencies]
+"wasmer/static-web-server" = "^1"
+
+[fs]
+"/public" = "frontend/dist"
+"/etc/static-web-server" = "etc/static-web-server"
+
+[[command]]
+name = "start"
+module = "wasmer/static-web-server:webserver"
+runner = "wasi"
+
+[command.annotations.wasi]
+env = ["SERVER_CONFIG_FILE=/etc/static-web-server/config.toml"]

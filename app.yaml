@@ -1,0 +1,5 @@
+kind: wasmer.io/App.v0
+name: campus-life-os
+package: sambitsabat515-ui/campus-life-os
+scaling:
+  mode: single_concurrency

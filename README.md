@@ -71,6 +71,15 @@ Runs both backend and frontend services simultaneously in isolated production co
 
 ---
 
+### Option C: Wasmer Edge Deployment (WebAssembly)
+```bash
+wasmer deploy
+```
+Deploys the React SPA and Three.js 3D assets to Wasmer's global serverless edge network.
+*See complete guide: [`docs/runbooks/wasmer-deploy.md`](docs/runbooks/wasmer-deploy.md)*.
+
+---
+
 ## 👥 Demo Logins & Personas
 
 | Role | Roll / Email | Password | Key Workflows to Test |
@@ -167,7 +176,8 @@ campus-life-os/
 │   │   ├── [backups.md](docs/runbooks/backups.md)      # Database snapshot & disaster recovery
 │   │   ├── [deploy.md](docs/runbooks/deploy.md)        # Production zero-downtime deployment
 │   │   ├── [rollback.md](docs/runbooks/rollback.md)    # Immediate release rollback procedure
-│   │   └── [incident.md](docs/runbooks/incident.md)    # SEV-1 incident triage & post-mortem template
+│   │   ├── [incident.md](docs/runbooks/incident.md)    # SEV-1 incident triage & post-mortem template
+│   │   └── [wasmer-deploy.md](docs/runbooks/wasmer-deploy.md) # Wasmer Edge WebAssembly hosting guide
 │   └── [security/](docs/security/)                     # Security Specifications
 │       └── [threat-model.md](docs/security/threat-model.md) # OWASP Top 10 threat model & mitigations
 │
