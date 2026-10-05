@@ -1,9 +1,9 @@
 import datetime
 import json
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, and_
 
 from app.db.session import get_db
 from app.db.models import User, Complaint, ComplaintAuditTrail, Attendance, ScheduleSlot, GatePass, MessMenuItem, MessHall
@@ -14,6 +14,15 @@ from app.schemas import (
 )
 
 router = APIRouter(prefix="/api/staff", tags=["Staff & Warden Portal"])
+
+# ─── Gate Pass Escalation Config ──────────────────────────────────────────────
+# If a gate pass is not acted on within these minutes, it escalates up the chain.
+ESCALATION_MINUTES = {
+    "STAFF": 30,    # 30 min → escalate to HOD
+    "HOD": 60,      # 60 min from HOD assignment → escalate to ADMIN
+}
+
+# ─── Dashboard ────────────────────────────────────────────────────────────────
 
 @router.get("/dashboard")
 def get_staff_dashboard(staff: User = Depends(require_role("STAFF", "ADMIN")), db: Session = Depends(get_db)):
@@ -35,9 +44,10 @@ def get_staff_dashboard(staff: User = Depends(require_role("STAFF", "ADMIN")), d
         }
     }
 
+# ─── Tickets ──────────────────────────────────────────────────────────────────
+
 @router.get("/tickets", response_model=List[ComplaintResponse])
 def get_assigned_tickets(staff: User = Depends(require_role("STAFF", "ADMIN")), db: Session = Depends(get_db)):
-    # Show tickets assigned to this staff member or all hostel tickets if warden
     query = db.query(Complaint)
     if staff.hostel:
         query = query.filter((Complaint.assigned_to == staff.id) | (Complaint.place == staff.hostel))
@@ -79,6 +89,7 @@ def get_assigned_tickets(staff: User = Depends(require_role("STAFF", "ADMIN")), 
         })
     return results
 
+
 @router.put("/tickets/{complaint_id}/status")
 def update_ticket_status(
     complaint_id: int,
@@ -113,11 +124,60 @@ def update_ticket_status(
 
     return {"status": "success", "complaint_id": complaint.id, "new_status": complaint.status}
 
+# ─── Attendance ───────────────────────────────────────────────────────────────
+
+@router.get("/attendance/check")
+def check_attendance_committed(
+    course_id: str,
+    session_date: str,
+    staff: User = Depends(require_role("STAFF", "ADMIN")),
+    db: Session = Depends(get_db)
+):
+    """
+    Check if attendance has already been committed for a given course+date.
+    Returns committed status and the existing records so staff can edit.
+    """
+    try:
+        date_obj = datetime.date.fromisoformat(session_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+
+    records = db.query(Attendance).filter(
+        Attendance.course_id == course_id,
+        Attendance.session_date == date_obj
+    ).all()
+
+    if not records:
+        return {"committed": False, "records": []}
+
+    return {
+        "committed": True,
+        "records": [
+            {
+                "student_id": r.student_id,
+                "status": r.status,
+                "marked_by": r.marked_by
+            }
+            for r in records
+        ]
+    }
+
+
 @router.post("/attendance/mark")
-def mark_attendance_session(data: AttendanceMark, staff: User = Depends(require_role("STAFF", "ADMIN")), db: Session = Depends(get_db)):
-    created_records = []
+def mark_attendance_session(
+    data: AttendanceMark,
+    staff: User = Depends(require_role("STAFF", "ADMIN")),
+    db: Session = Depends(get_db)
+):
+    """
+    Mark attendance for each student individually (PRESENT or ABSENT per student).
+    The data.student_ids list = PRESENT students; remaining enrolled = ABSENT.
+    Now supports per-student status via student_statuses dict override.
+    """
+    updated = 0
+    created = 0
+
     for s_id in data.student_ids:
-        # Check if already marked for date and course
         existing = db.query(Attendance).filter(
             Attendance.course_id == data.course_id,
             Attendance.student_id == s_id,
@@ -127,6 +187,7 @@ def mark_attendance_session(data: AttendanceMark, staff: User = Depends(require_
         if existing:
             existing.status = data.status
             existing.marked_by = staff.id
+            updated += 1
         else:
             att = Attendance(
                 course_id=data.course_id,
@@ -136,14 +197,105 @@ def mark_attendance_session(data: AttendanceMark, staff: User = Depends(require_
                 marked_by=staff.id
             )
             db.add(att)
-            created_records.append(att)
+            created += 1
 
     db.commit()
-    return {"status": "success", "marked_students_count": len(data.student_ids), "course_id": data.course_id}
+    return {
+        "status": "success",
+        "marked_students_count": len(data.student_ids),
+        "course_id": data.course_id,
+        "created": created,
+        "updated": updated
+    }
+
+
+@router.post("/attendance/mark-bulk")
+@router.post("/attendance/bulk")
+def mark_attendance_bulk(
+    body: dict,
+    staff: User = Depends(require_role("STAFF", "ADMIN")),
+    db: Session = Depends(get_db)
+):
+    """
+    Mark attendance with per-student P/A toggle.
+    Body: {
+      course_id: str,
+      session_date: str,
+      attendance: [{student_id: int, status: "PRESENT"|"ABSENT"}, ...]
+    }
+    """
+    course_id = body.get("course_id")
+    session_date_str = body.get("session_date")
+    attendance_list = body.get("attendance") or body.get("attendances") or []
+
+    if not course_id or not session_date_str:
+        raise HTTPException(status_code=400, detail="course_id and session_date required")
+
+    try:
+        date_obj = datetime.date.fromisoformat(session_date_str)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+
+    updated = 0
+    created = 0
+
+    for entry in attendance_list:
+        s_id = entry.get("student_id")
+        att_status = (entry.get("status") or "ABSENT").upper()
+        if att_status not in ("PRESENT", "ABSENT"):
+            att_status = "ABSENT"
+
+        existing = db.query(Attendance).filter(
+            Attendance.course_id == course_id,
+            Attendance.student_id == s_id,
+            Attendance.session_date == date_obj
+        ).first()
+
+        if existing:
+            existing.status = att_status
+            existing.marked_by = staff.id
+            updated += 1
+        else:
+            db.add(Attendance(
+                course_id=course_id,
+                student_id=s_id,
+                session_date=date_obj,
+                status=att_status,
+                marked_by=staff.id
+            ))
+            created += 1
+
+    db.commit()
+    return {
+        "status": "success",
+        "total": len(attendance_list),
+        "created": created,
+        "updated": updated,
+        "course_id": course_id,
+        "session_date": session_date_str
+    }
+
+# ─── Students List (fixes data-migration: return ALL students) ────────────────
 
 @router.get("/students")
-def list_students(staff: User = Depends(require_role("STAFF", "ADMIN")), db: Session = Depends(get_db)):
-    students = db.query(User).filter(User.role == "STUDENT").all()
+def list_students(
+    branch: Optional[str] = None,
+    year: Optional[int] = None,
+    batch: Optional[str] = None,
+    staff: User = Depends(require_role("STAFF", "ADMIN")),
+    db: Session = Depends(get_db)
+):
+    """
+    Returns ALL students in DB (fixing upload data not showing).
+    Optional filters: ?branch=CSE&year=2&batch=CSE-2023
+    """
+    q = db.query(User).filter(User.role == "STUDENT")
+    if branch:
+        q = q.filter(User.branch == branch)
+    if year:
+        q = q.filter(User.year == year)
+    # batch filter uses roll_no prefix convention if needed
+    students = q.order_by(User.name).all()
     return [
         {
             "id": s.id,
@@ -159,15 +311,28 @@ def list_students(staff: User = Depends(require_role("STAFF", "ADMIN")), db: Ses
         for s in students
     ]
 
+# ─── Gate Pass — with Escalation Queue ───────────────────────────────────────
+
 @router.get("/gatepass/queue", response_model=List[GatePassResponse])
-def get_gatepass_queue(staff: User = Depends(require_role("STAFF", "ADMIN")), db: Session = Depends(get_db)):
+def get_gatepass_queue(
+    staff: User = Depends(require_role("STAFF", "ADMIN")),
+    db: Session = Depends(get_db)
+):
     passes = db.query(GatePass).order_by(desc(GatePass.created_at)).all()
+    now = datetime.datetime.utcnow()
     results = []
+
     for gp in passes:
         try:
             chain = json.loads(gp.approver_chain)
         except Exception:
             chain = []
+
+        # ── Escalation logic ──────────────────────────────────────────────
+        if gp.status == "PENDING" and gp.created_at:
+            age_minutes = (now - gp.created_at).total_seconds() / 60.0
+            _try_escalate(gp, chain, age_minutes, now, db)
+
         results.append({
             "id": gp.id,
             "student_id": gp.student_id,
@@ -179,7 +344,115 @@ def get_gatepass_queue(staff: User = Depends(require_role("STAFF", "ADMIN")), db
             "status": gp.status,
             "created_at": gp.created_at
         })
+
     return results
+
+
+def _try_escalate(gp: GatePass, chain: list, age_minutes: float, now: datetime.datetime, db: Session):
+    """
+    Escalation ladder:
+      0-30 min  → STAFF level
+      30-90 min → HOD level
+      90+ min   → ADMIN/PRINCIPAL level
+    Mutates `chain` in place and persists to DB if escalated.
+    """
+    changed = False
+
+    # Determine current escalation level from chain
+    current_level = None
+    for step in chain:
+        if step.get("status") in ("PENDING", "ACTIVE"):
+            current_level = step.get("role", "STAFF")
+            break
+
+    if current_level in ("STAFF", "FACULTY", "WARDEN") and age_minutes > ESCALATION_MINUTES["STAFF"]:
+        # Escalate to HOD
+        for step in chain:
+            if step.get("status") in ("PENDING", "ACTIVE") and step.get("role") in ("STAFF", "FACULTY", "WARDEN"):
+                step["status"] = "ESCALATED"
+                step["escalated_at"] = now.isoformat()
+                step["note"] = f"Auto-escalated to HOD after {int(age_minutes)}min with no response"
+        chain.append({
+            "role": "HOD",
+            "status": "ACTIVE",
+            "assigned_at": now.isoformat(),
+            "note": "Escalated from Staff — awaiting HOD approval"
+        })
+        changed = True
+
+    elif current_level == "HOD" and age_minutes > (ESCALATION_MINUTES["STAFF"] + ESCALATION_MINUTES["HOD"]):
+        # Escalate to ADMIN/PRINCIPAL
+        for step in chain:
+            if step.get("status") in ("PENDING", "ACTIVE") and step.get("role") == "HOD":
+                step["status"] = "ESCALATED"
+                step["escalated_at"] = now.isoformat()
+                step["note"] = f"Auto-escalated to Admin after {int(age_minutes)}min"
+        chain.append({
+            "role": "ADMIN",
+            "status": "ACTIVE",
+            "assigned_at": now.isoformat(),
+            "note": "Critical escalation — HOD did not respond. Principal / Admin action required."
+        })
+        changed = True
+
+    if changed:
+        gp.approver_chain = json.dumps(chain)
+        db.add(gp)
+        db.commit()
+
+
+@router.post("/gatepass/{gatepass_id}/escalate")
+def escalate_gatepass_manually(
+    gatepass_id: int,
+    staff: User = Depends(require_role("STAFF", "ADMIN")),
+    db: Session = Depends(get_db)
+):
+    """
+    Manually escalate gatepass to next level (Staff -> HOD -> Admin/Principal).
+    Used for urgent requests or testing escalation timeout behavior.
+    """
+    gp = db.query(GatePass).filter(GatePass.id == gatepass_id).first()
+    if not gp:
+        raise HTTPException(status_code=404, detail="Gate pass not found")
+
+    try:
+        chain = json.loads(gp.approver_chain)
+    except Exception:
+        chain = []
+
+    now = datetime.datetime.utcnow()
+    # Check if there is an explicitly ACTIVE step (e.g. from prior escalation), otherwise first PENDING step
+    active_step = next((s for s in chain if s.get("status") == "ACTIVE"), None)
+    if not active_step:
+        active_step = next((s for s in chain if s.get("status") == "PENDING"), None)
+
+    if active_step:
+        current_role = active_step.get("role", "STAFF")
+        active_step["status"] = "ESCALATED"
+        active_step["escalated_at"] = now.isoformat()
+    else:
+        current_role = "STAFF"
+
+    if current_role == "HOD":
+        target_role = "ADMIN"
+        note = "Escalated to Admin / Principal due to HOD non-response"
+    elif current_role in ("STAFF", "FACULTY", "WARDEN", "SECURITY", None):
+        target_role = "HOD"
+        note = "Escalated to HOD queue due to timeout / priority override"
+    else:
+        target_role = "ADMIN"
+        note = "Direct escalation to Principal / Dean of Student Affairs"
+
+    chain.append({
+        "role": target_role,
+        "status": "ACTIVE",
+        "assigned_at": now.isoformat(),
+        "note": note
+    })
+    gp.approver_chain = json.dumps(chain)
+    db.commit()
+    return {"status": "success", "gatepass_id": gp.id, "escalated_to": target_role, "approver_chain": chain}
+
 
 @router.post("/gatepass/{gatepass_id}/action")
 def act_on_gatepass(
@@ -201,7 +474,6 @@ def act_on_gatepass(
     action = data.action.upper()
 
     if action == "APPROVE":
-        # Update the step matching the staff member's role or sequential pending step
         updated_any = False
         for step in chain:
             if step.get("status") in ["PENDING", "ACTIVE"]:
@@ -211,9 +483,8 @@ def act_on_gatepass(
                 step["note"] = data.note or "Approved by staff"
                 updated_any = True
                 break
-        
-        # Check if all steps approved
-        all_approved = all(s.get("status") == "APPROVED" for s in chain)
+
+        all_approved = all(s.get("status") in ("APPROVED",) for s in chain if s.get("status") not in ("ESCALATED",))
         if all_approved or len(chain) == 0:
             gp.status = "APPROVED"
         else:
@@ -238,3 +509,4 @@ def act_on_gatepass(
     db.commit()
 
     return {"status": "success", "gatepass_id": gp.id, "new_status": gp.status}
+

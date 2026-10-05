@@ -3,7 +3,7 @@ import {
   BarChart3, Ticket, Shield, Bell, Sparkles, Layers, Users, FileCheck,
   UploadCloud, CheckSquare, MessageSquare, Volume2, Wifi, Phone,
   AlertTriangle, CheckCircle2, Clock, Flame, ChevronRight, X, Plus,
-  Send, RefreshCw, Eye, ArrowRight, CornerDownRight
+  Send, RefreshCw, Eye, ArrowRight, CornerDownRight, BarChart2
 } from 'lucide-react';
 import CampusMapViewer from '../map/CampusMapViewer';
 import { useAuth, DEMO_CREDENTIALS } from '../context/AuthContext';
@@ -26,6 +26,11 @@ export default function AdminDashboard({ onSwitchToStudent }) {
   const [halls, setHalls] = useState([]);
   const [incidents, setIncidents] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // Staff Workload (timetable-based)
+  const [staffWorkload, setStaffWorkload] = useState([]);
+  const [reassignTarget, setReassignTarget] = useState(null); // {slot, newInstructor}
+  const [allInstructors, setAllInstructors] = useState([]);
 
   // Ticket filters
   const [ticketFilter, setTicketFilter] = useState('All');
@@ -53,14 +58,15 @@ export default function AdminDashboard({ onSwitchToStudent }) {
 
   const loadAllData = async () => {
     try {
-      const [anData, tList, gpList, nList, certList, hList, incList] = await Promise.all([
+      const [anData, tList, gpList, nList, certList, hList, incList, wlData] = await Promise.all([
         api.getAdminAnalytics(),
         api.getStaffTickets(),
         api.getStaffGatePassQueue(),
         api.getNoticesAnalytics(),
         api.getAdminCertificates(),
         api.getMessHalls(),
-        api.getIncidents()
+        api.getIncidents(),
+        api.getStaffWorkload()
       ]);
       setAnalytics(anData);
       setTickets(tList);
@@ -69,8 +75,12 @@ export default function AdminDashboard({ onSwitchToStudent }) {
       setCertificates(certList);
       setHalls(hList);
       setIncidents(incList);
+      setStaffWorkload(wlData || []);
+      // Build instructor list for reassignment dropdown
+      const names = [...new Set((wlData || []).map(w => w.instructor))];
+      setAllInstructors(names);
     } catch (e) {
-      console.error("Admin poll error:", e);
+      console.error('Admin poll error:', e);
     } finally {
       setLoading(false);
     }
@@ -169,12 +179,47 @@ export default function AdminDashboard({ onSwitchToStudent }) {
     setCsvPreview({ headers, totalRows: rows.length, valid, duplicates, missing });
   };
 
-  const handleCommitMigration = () => {
-    if (!csvPreview) return;
-    setImportedCount(prev => prev + csvPreview.valid);
-    alert(`Successfully imported ${csvPreview.valid} student records. Duplicates flagged and resolved.`);
-    setCsvText('');
-    setCsvPreview(null);
+  const handleCommitMigration = async () => {
+    if (!csvPreview || !csvText.trim()) return;
+    try {
+      const lines = csvText.trim().split(/\r?\n/).map(l => l.split(',').map(c => c.trim()));
+      if (lines.length < 2) return;
+      const headers = lines[0].map(h => h.toLowerCase());
+      const nameIdx = headers.findIndex(h => h.includes('name'));
+      const rollIdx = headers.findIndex(h => h.includes('roll'));
+      const hostelIdx = headers.findIndex(h => h.includes('hostel') || h.includes('room'));
+      const deptIdx = headers.findIndex(h => h.includes('dept') || h.includes('branch'));
+      const phoneIdx = headers.findIndex(h => h.includes('mobile') || h.includes('phone'));
+
+      const studentList = [];
+      lines.slice(1).forEach(row => {
+        if (!row || row.length === 0 || (row.length === 1 && !row[0])) return;
+        const name = nameIdx >= 0 ? row[nameIdx] : row[0];
+        const roll = rollIdx >= 0 ? row[rollIdx] : row[1];
+        if (!name || !roll) return;
+        studentList.push({
+          name,
+          roll_no: roll,
+          hostel_room: hostelIdx >= 0 ? row[hostelIdx] : (row[2] || ''),
+          branch: deptIdx >= 0 ? row[deptIdx] : (row[3] || 'CSE'),
+          phone: phoneIdx >= 0 ? row[phoneIdx] : (row[4] || '')
+        });
+      });
+
+      if (studentList.length === 0) {
+        alert('No valid student rows found in CSV to import.');
+        return;
+      }
+
+      const res = await api.importStudents(studentList);
+      setImportedCount(prev => prev + (res.created || 0) + (res.updated || 0));
+      alert(`✅ Migration Success: ${res.created} new students created, ${res.updated} updated in database.\nThey will immediately show up in Staff "Mark Attendance" and student rosters!`);
+      setCsvText('');
+      setCsvPreview(null);
+      loadAllData();
+    } catch (e) {
+      alert(`Migration error: ${e.message}`);
+    }
   };
 
   const handleConvertWhatsApp = async () => {
@@ -1146,65 +1191,308 @@ export default function AdminDashboard({ onSwitchToStudent }) {
               <div style={{ marginBottom: '20px' }}>
                 <h1 style={{ fontSize: '24px', fontWeight: 800 }}>Staff Workload Command</h1>
                 <p style={{ fontSize: '13px', color: 'var(--color-neutral-mid)' }}>
-                  Workload balancing and ticket dispatch distribution
+                  Teaching hours per day by instructor — detect overloads and reassign slots
                 </p>
               </div>
 
-              <div style={{ backgroundColor: '#FFF', padding: '20px', borderRadius: '14px', border: '1px solid var(--color-neutral-light)', marginBottom: '14px' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                  {analytics?.staff_workload?.map(s => (
-                    <div key={s.staff_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', backgroundColor: 'var(--color-surface-bg)', borderRadius: '8px' }}>
-                      <div>
-                        <div style={{ fontSize: '14px', fontWeight: 700 }}>{s.name}</div>
-                        <div style={{ fontSize: '12px', color: 'var(--color-neutral-mid)' }}>{s.email}</div>
+              {/* Summary cards */}
+              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '20px' }}>
+                {[
+                  { label: 'Total Instructors', val: staffWorkload.length, color: 'var(--color-primary)' },
+                  { label: 'Overloaded (>5/day)', val: staffWorkload.filter(w => Object.values(w.days || {}).some(v => v > 5)).length, color: 'var(--color-semantic-red)' },
+                  { label: 'Total Slots', val: staffWorkload.reduce((a, w) => a + (w.total_slots || 0), 0), color: 'var(--color-semantic-amber)' },
+                ].map(stat => (
+                  <div key={stat.label} style={{
+                    flex: '1', minWidth: '140px', backgroundColor: '#fff',
+                    borderRadius: '12px', padding: '16px', boxShadow: 'var(--shadow-sm)',
+                    borderTop: `3px solid ${stat.color}`
+                  }}>
+                    <div style={{ fontSize: '24px', fontWeight: 800, color: stat.color }}>{stat.val}</div>
+                    <div style={{ fontSize: '11px', color: 'var(--color-neutral-mid)', fontWeight: 700, marginTop: '2px' }}>{stat.label}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Per-instructor cards */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                {staffWorkload.length === 0 && (
+                  <div style={{ textAlign: 'center', padding: '40px', color: 'var(--color-neutral-mid)', backgroundColor: '#fff', borderRadius: '12px' }}>
+                    <BarChart2 size={32} style={{ marginBottom: '8px' }} />
+                    <div>No timetable slots found. Staff must add schedule slots first.</div>
+                  </div>
+                )}
+                {staffWorkload.map((w, idx) => {
+                  const maxDay = Math.max(...Object.values(w.days || { _: 0 }));
+                  const isOverloaded = maxDay > 5;
+                  const days = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+                  return (
+                    <div key={idx} style={{
+                      backgroundColor: '#fff', borderRadius: '12px', padding: '18px',
+                      boxShadow: 'var(--shadow-sm)',
+                      borderLeft: `4px solid ${isOverloaded ? 'var(--color-semantic-red)' : 'var(--color-semantic-green)'}`
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
+                        <div>
+                          <div style={{ fontWeight: 800, fontSize: '15px' }}>{w.instructor}</div>
+                          <div style={{ fontSize: '12px', color: 'var(--color-neutral-mid)' }}>{w.total_slots} total slots/week</div>
+                        </div>
+                        {isOverloaded && (
+                          <span className="status-pill red" style={{ fontSize: '11px' }}>⚠ OVERLOADED ({maxDay} slots/day)</span>
+                        )}
+                        {!isOverloaded && (
+                          <span className="status-pill green" style={{ fontSize: '11px' }}>✓ Balanced</span>
+                        )}
                       </div>
-                      <div style={{ textAlign: 'right' }}>
-                        <span className="status-pill blue">{s.active_tickets} active tickets</span>
+
+                      {/* Day-by-day bar */}
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '12px' }}>
+                        {days.map(d => {
+                          const count = w.days[d] || 0;
+                          const pct = maxDay > 0 ? Math.round((count / Math.max(maxDay, 5)) * 100) : 0;
+                          return (
+                            <div key={d} style={{ textAlign: 'center', minWidth: '40px' }}>
+                              <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--color-neutral-mid)', marginBottom: '3px' }}>{d.slice(0,3).toUpperCase()}</div>
+                              <div style={{ height: '40px', width: '32px', backgroundColor: 'var(--color-surface-bg)', borderRadius: '4px', position: 'relative', overflow: 'hidden', margin: '0 auto' }}>
+                                <div style={{
+                                  position: 'absolute', bottom: 0, left: 0, right: 0,
+                                  height: `${pct}%`,
+                                  backgroundColor: count > 5 ? 'var(--color-semantic-red)' : count > 3 ? 'var(--color-semantic-amber)' : 'var(--color-semantic-green)',
+                                  transition: 'height 0.4s'
+                                }} />
+                              </div>
+                              <div style={{ fontSize: '10px', fontWeight: 800, marginTop: '2px' }}>{count}</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {/* Reassignable slots */}
+                      {isOverloaded && (
+                        <div>
+                          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--color-neutral-mid)', marginBottom: '6px' }}>REASSIGN OVERLOADED SLOTS:</div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            {(w.slots || []).filter(s => (w.days[s.day] || 0) > 4).map(s => (
+                              <div key={s.id} style={{
+                                display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap',
+                                padding: '8px 12px', backgroundColor: 'rgba(239,68,68,0.05)',
+                                borderRadius: '8px', border: '1px dashed var(--color-semantic-red)'
+                              }}>
+                                <div style={{ flex: 1, fontSize: '12px' }}>
+                                  <strong>{s.course_id}</strong> · {s.day} {s.start}–{s.end} · Room {s.room}
+                                </div>
+                                <select
+                                  defaultValue=""
+                                  onChange={async (e) => {
+                                    if (!e.target.value) return;
+                                    if (!confirm(`Reassign ${s.course_id} to ${e.target.value}?`)) return;
+                                    try {
+                                      await api.reassignSlot(s.id, e.target.value);
+                                      alert('✅ Slot reassigned!');
+                                      loadAllData();
+                                    } catch (err) { alert(err.message); }
+                                  }}
+                                  style={{ padding: '4px 8px', borderRadius: '6px', border: '1px solid var(--color-neutral-light)', fontSize: '12px' }}
+                                >
+                                  <option value="">Reassign to…</option>
+                                  {allInstructors.filter(n => n !== w.instructor).map(n => (
+                                    <option key={n} value={n}>{n}</option>
+                                  ))}
+                                </select>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Complaint-based workload from existing analytics */}
+              {analytics?.staff_workload?.length > 0 && (
+                <div style={{ marginTop: '20px', backgroundColor: '#fff', padding: '20px', borderRadius: '12px', boxShadow: 'var(--shadow-sm)' }}>
+                  <h3 style={{ fontSize: '15px', fontWeight: 700, marginBottom: '14px' }}>Complaint Assignment Workload</h3>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {analytics.staff_workload.map(s => (
+                      <div key={s.staff_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', backgroundColor: 'var(--color-surface-bg)', borderRadius: '8px', flexWrap: 'wrap', gap: '8px' }}>
+                        <div>
+                          <div style={{ fontSize: '14px', fontWeight: 700 }}>{s.name}</div>
+                          <div style={{ fontSize: '11px', color: 'var(--color-neutral-mid)' }}>{s.email}</div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                          <span className={`status-pill ${s.active_tickets > 5 ? 'red' : 'blue'}`}>{s.active_tickets} active</span>
+                          <span className="status-pill green">{s.resolved_tickets} resolved</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ================= TAB 8: APPROVALS (Gate Pass Escalation Queue & Certificates) ================= */}
+          {currentPage === 'approvals' && (
+            <div>
+              <div style={{ marginBottom: '20px' }}>
+                <h1 style={{ fontSize: '24px', fontWeight: 800 }}>Institutional Approvals Queue</h1>
+                <p style={{ fontSize: '13px', color: 'var(--color-neutral-mid)' }}>
+                  Multi-tier escalation queue for Gate Passes (Staff → HOD → Admin/Principal) and Academic Certificates
+                </p>
+              </div>
+
+              {/* SECTION A: Gate Pass Escalation Queue */}
+              <div style={{ marginBottom: '32px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
+                  <h3 style={{ fontSize: '16px', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
+                    <Shield size={18} color="var(--color-primary)" />
+                    Gate Pass Escalation Queue ({gatePasses.length} Total Requests)
+                  </h3>
+                  <span style={{ fontSize: '12px', color: 'var(--color-neutral-mid)' }}>
+                    ⏱ Auto-escalation: Staff (30m) → HOD (90m) → Admin/Principal
+                  </span>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {gatePasses.length === 0 && (
+                    <div style={{ backgroundColor: '#fff', padding: '24px', borderRadius: '10px', textAlign: 'center', color: 'var(--color-neutral-mid)' }}>
+                      No gate passes currently in queue.
+                    </div>
+                  )}
+                  {gatePasses.map(gp => {
+                    const chain = Array.isArray(gp.approver_chain) ? gp.approver_chain : [];
+                    const activeStep = chain.find(s => s.status === 'ACTIVE' || s.status === 'PENDING') || chain[chain.length - 1];
+                    const isEscalated = chain.some(s => s.status === 'ESCALATED' || s.role === 'HOD' || s.role === 'ADMIN');
+
+                    return (
+                      <div key={gp.id} style={{
+                        backgroundColor: '#fff', borderRadius: '12px', padding: '16px 20px',
+                        boxShadow: 'var(--shadow-sm)',
+                        borderLeft: isEscalated ? '4px solid var(--color-semantic-amber)' : '4px solid var(--color-primary)',
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px'
+                      }}>
+                        <div style={{ flex: 1, minWidth: '280px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: '11px', fontWeight: 800, color: 'var(--color-primary)', textTransform: 'uppercase' }}>
+                              Pass #{gp.id}
+                            </span>
+                            <span className={`status-pill ${gp.status === 'APPROVED' ? 'green' : gp.status === 'REJECTED' ? 'red' : 'amber'}`}>
+                              {gp.status}
+                            </span>
+                            {activeStep && (
+                              <span style={{
+                                fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '10px',
+                                backgroundColor: activeStep.role === 'ADMIN' ? 'rgba(239,68,68,0.1)' : activeStep.role === 'HOD' ? '#fff3cd' : 'rgba(139,32,114,0.1)',
+                                color: activeStep.role === 'ADMIN' ? '#e55' : activeStep.role === 'HOD' ? '#856404' : 'var(--color-primary)'
+                              }}>
+                                In Queue: {activeStep.role}
+                              </span>
+                            )}
+                          </div>
+
+                          <div style={{ fontWeight: 800, fontSize: '15px', marginBottom: '4px' }}>
+                            Destination: {gp.destination}
+                          </div>
+                          <div style={{ fontSize: '13px', color: 'var(--color-ink)', marginBottom: '8px' }}>
+                            Reason: <i>"{gp.reason}"</i>
+                          </div>
+
+                          <div style={{ fontSize: '12px', color: 'var(--color-neutral-mid)', display: 'flex', gap: '16px', flexWrap: 'wrap', marginBottom: '10px' }}>
+                            <span>Departure: {gp.departure_time ? new Date(gp.departure_time).toLocaleString() : 'N/A'}</span>
+                            <span>Expected Return: {gp.expected_return ? new Date(gp.expected_return).toLocaleString() : 'N/A'}</span>
+                          </div>
+
+                          {/* Escalation ladder badges */}
+                          {chain.length > 0 && (
+                            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '6px' }}>
+                              {chain.map((step, idx) => (
+                                <span key={idx} style={{
+                                  fontSize: '11px', padding: '3px 8px', borderRadius: '8px',
+                                  backgroundColor: step.status === 'APPROVED' ? 'var(--color-semantic-green-bg)'
+                                    : step.status === 'ESCALATED' ? '#fff3cd'
+                                    : step.status === 'ACTIVE' ? 'rgba(139,32,114,0.1)'
+                                    : 'var(--color-surface-bg)',
+                                  color: step.status === 'APPROVED' ? 'var(--color-semantic-green)'
+                                    : step.status === 'ESCALATED' ? '#856404'
+                                    : 'var(--color-ink)',
+                                  border: '1px solid var(--color-neutral-light)'
+                                }}>
+                                  {idx + 1}. {step.role}: {step.status}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {gp.status === 'PENDING' && (
+                          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                            <button
+                              onClick={async () => {
+                                try {
+                                  await api.actOnGatePassAdmin(gp.id, 'APPROVE', 'Approved by Dean/Principal');
+                                  loadAllData();
+                                } catch (e) { alert(e.message); }
+                              }}
+                              className="btn-primary"
+                              style={{ width: 'auto', padding: '8px 16px', fontSize: '12px', backgroundColor: 'var(--color-semantic-green)' }}
+                            >
+                              ✓ Admin Approve
+                            </button>
+                            <button
+                              onClick={async () => {
+                                try {
+                                  await api.actOnGatePassAdmin(gp.id, 'REJECT', 'Rejected by Administrator');
+                                  loadAllData();
+                                } catch (e) { alert(e.message); }
+                              }}
+                              className="btn-secondary"
+                              style={{ width: 'auto', padding: '8px 16px', fontSize: '12px', color: 'var(--color-semantic-red)' }}
+                            >
+                              ✕ Reject
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* SECTION B: Certificate Approvals */}
+              <div>
+                <h3 style={{ fontSize: '16px', fontWeight: 800, marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <FileCheck size={18} color="var(--color-primary)" />
+                  Academic Certificate Requests ({certificates.length})
+                </h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {certificates.length === 0 && (
+                    <div style={{ backgroundColor: '#fff', padding: '24px', borderRadius: '10px', textAlign: 'center', color: 'var(--color-neutral-mid)' }}>
+                      No certificate requests pending.
+                    </div>
+                  )}
+                  {certificates.map(c => (
+                    <div key={c.id} className="category-card cat-it" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                      <div>
+                        <div style={{ fontSize: '11px', color: 'var(--color-neutral-mid)' }}>APPLICATION #{c.id} · {c.type}</div>
+                        <h4 style={{ fontSize: '15px', fontWeight: 700 }}>{c.student_name} ({c.student_roll})</h4>
+                        <div style={{ fontSize: '12px', color: 'var(--color-neutral-mid)' }}>Purpose: {c.purpose}</div>
+                      </div>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <span className={`status-pill ${c.status === 'READY' ? 'green' : 'amber'}`}>{c.status}</span>
+                        {c.status === 'PENDING' && (
+                          <button onClick={async () => { await api.updateCertificateStatus(c.id, 'PROCESSING'); loadAllData(); }} className="btn-primary" style={{ width: 'auto', padding: '6px 12px', fontSize: '12px' }}>
+                            Process
+                          </button>
+                        )}
+                        {c.status === 'PROCESSING' && (
+                          <button onClick={async () => { await api.updateCertificateStatus(c.id, 'READY'); loadAllData(); }} className="btn-primary" style={{ width: 'auto', padding: '6px 12px', fontSize: '12px', backgroundColor: 'var(--color-semantic-green)' }}>
+                            Mark Ready
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))}
                 </div>
-              </div>
-
-              <div style={{ padding: '12px 16px', backgroundColor: 'var(--color-semantic-amber-bg)', border: '1px solid rgba(217, 119, 6, 0.3)', borderRadius: '10px', fontSize: '12px', color: 'var(--color-semantic-amber)' }}>
-                <strong>Suggestion:</strong> Workload balanced across maintenance and electrical cells.
-              </div>
-            </div>
-          )}
-
-          {/* ================= TAB 8: APPROVALS (Certificates) ================= */}
-          {currentPage === 'approvals' && (
-            <div>
-              <div style={{ marginBottom: '20px' }}>
-                <h1 style={{ fontSize: '24px', fontWeight: 800 }}>Certificate Approvals</h1>
-                <p style={{ fontSize: '13px', color: 'var(--color-neutral-mid)' }}>
-                  Academic section clearance for Bonafide, Transcript, and Migration
-                </p>
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                {certificates.map(c => (
-                  <div key={c.id} className="category-card cat-it" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <div style={{ fontSize: '11px', color: 'var(--color-neutral-mid)' }}>APPLICATION #{c.id} · {c.type}</div>
-                      <h4 style={{ fontSize: '15px', fontWeight: 700 }}>{c.student_name} ({c.student_roll})</h4>
-                      <div style={{ fontSize: '12px', color: 'var(--color-neutral-mid)' }}>Purpose: {c.purpose}</div>
-                    </div>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <span className={`status-pill ${c.status === 'READY' ? 'green' : 'amber'}`}>{c.status}</span>
-                      {c.status === 'PENDING' && (
-                        <button onClick={async () => { await api.updateCertificateStatus(c.id, 'PROCESSING'); loadAllData(); }} className="btn-primary" style={{ width: 'auto', padding: '6px 12px', fontSize: '12px' }}>
-                          Process
-                        </button>
-                      )}
-                      {c.status === 'PROCESSING' && (
-                        <button onClick={async () => { await api.updateCertificateStatus(c.id, 'READY'); loadAllData(); }} className="btn-primary" style={{ width: 'auto', padding: '6px 12px', fontSize: '12px', backgroundColor: 'var(--color-semantic-green)' }}>
-                          Mark Ready
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
               </div>
             </div>
           )}

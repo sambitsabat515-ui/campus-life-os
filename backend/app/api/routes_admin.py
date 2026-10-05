@@ -1,4 +1,5 @@
 import datetime
+import json
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -9,7 +10,7 @@ from app.db.models import (
     User, Complaint, ComplaintAuditTrail, GatePass, CertificateRequest,
     Notice, NoticeReadReceipt, Incident, MessHall
 )
-from app.auth.security import require_role
+from app.auth.security import require_role, hash_password
 from app.schemas import (
     NoticeCreate, NoticeResponse, CertificateRequestUpdate,
     CertificateRequestResponse, MergeClusterRequest
@@ -327,3 +328,174 @@ def _get_notice_target_count(db: Session, target_type: str, target_value: str) -
         except ValueError:
             return query.count()
     return query.count()
+
+
+# ─── Data Migration: Student Import ──────────────────────────────────────────
+
+@router.post("/migration/import-students")
+def import_students(
+    payload: Dict[str, Any],
+    admin: User = Depends(require_role("ADMIN")),
+    db: Session = Depends(get_db)
+):
+    """
+    Imports/migrates student roster from CSV or registers into the database.
+    Migrated students immediately appear in Staff Mark Attendance & Student Lists.
+    """
+    raw_list = payload.get("students", [])
+    if not raw_list:
+        raise HTTPException(status_code=400, detail="No student records provided")
+
+    created = 0
+    updated = 0
+
+    for item in raw_list:
+        name = (item.get("name") or item.get("Name") or "").strip()
+        roll = (item.get("roll_no") or item.get("roll") or item.get("Roll No.") or item.get("Roll No") or "").strip()
+        if not name or not roll:
+            continue
+
+        dept = (item.get("branch") or item.get("dept") or item.get("Dept") or "CSE").strip()
+        phone = (item.get("phone") or item.get("mobile") or item.get("Mobile") or "").strip() or None
+
+        # Parse hostel & room from combined or separate fields
+        hostel_raw = item.get("hostel") or item.get("Hostel") or ""
+        room_raw = item.get("room") or item.get("Room") or ""
+        combined = item.get("hostel_room") or item.get("Hostel Room") or ""
+        if combined and not hostel_raw:
+            parts = combined.split("-")
+            hostel_raw = parts[0].strip()
+            if not hostel_raw.endswith("Hall"):
+                hostel_raw += " Hall"
+            if len(parts) > 1:
+                room_raw = parts[1].strip()
+
+        year_val = item.get("year", 2)
+        try:
+            year_val = int(year_val)
+        except Exception:
+            year_val = 2
+
+        email = (item.get("email") or f"{roll.lower()}@bput.ac.in").strip().lower()
+
+        # Check existing student by roll_no or email
+        existing = db.query(User).filter(
+            or_(User.roll_no == roll, User.email == email)
+        ).first()
+
+        if existing:
+            existing.name = name
+            existing.branch = dept
+            if hostel_raw:
+                existing.hostel = hostel_raw
+            if room_raw:
+                existing.room = room_raw
+            if phone:
+                existing.phone = phone
+            existing.year = year_val
+            updated += 1
+        else:
+            new_student = User(
+                name=name,
+                roll_no=roll,
+                email=email,
+                password_hash=hash_password("student123"),
+                role="STUDENT",
+                branch=dept,
+                year=year_val,
+                hostel=hostel_raw or "Aryabhatta Hall",
+                room=room_raw or "101",
+                phone=phone
+            )
+            db.add(new_student)
+            created += 1
+
+    db.commit()
+    return {
+        "status": "success",
+        "total_processed": len(raw_list),
+        "created": created,
+        "updated": updated
+    }
+
+
+# ─── Escalated Gate Passes (HOD / Admin Queue) ───────────────────────────────
+
+@router.get("/gatepass/escalated")
+def get_escalated_gatepasses(
+    admin: User = Depends(require_role("ADMIN")),
+    db: Session = Depends(get_db)
+):
+    """
+    Returns gate passes that have escalated to HOD or ADMIN tier,
+    or require executive authority action.
+    """
+    passes = db.query(GatePass).order_by(desc(GatePass.created_at)).all()
+    escalated = []
+    for gp in passes:
+        try:
+            chain = json.loads(gp.approver_chain)
+        except Exception:
+            chain = []
+
+        is_escalated = any(step.get("status") == "ESCALATED" or step.get("role") in ("HOD", "ADMIN") for step in chain)
+        student_obj = db.query(User).filter(User.id == gp.student_id).first()
+
+        if is_escalated or gp.status == "PENDING":
+            escalated.append({
+                "id": gp.id,
+                "student_id": gp.student_id,
+                "student_name": student_obj.name if student_obj else "Student",
+                "student_roll": student_obj.roll_no if student_obj else "",
+                "student_hostel": student_obj.hostel if student_obj else "",
+                "reason": gp.reason,
+                "destination": gp.destination,
+                "departure_time": gp.departure_time,
+                "expected_return": gp.expected_return,
+                "approver_chain": chain,
+                "status": gp.status,
+                "created_at": gp.created_at
+            })
+    return escalated
+
+
+@router.post("/gatepass/{gatepass_id}/action")
+def act_on_escalated_gatepass(
+    gatepass_id: int,
+    payload: Dict[str, Any],
+    admin: User = Depends(require_role("ADMIN")),
+    db: Session = Depends(get_db)
+):
+    gp = db.query(GatePass).filter(GatePass.id == gatepass_id).first()
+    if not gp:
+        raise HTTPException(status_code=404, detail="Gate pass not found")
+
+    action = payload.get("action", "APPROVE").upper()
+    note = payload.get("note", f"Action by Administrator / Principal {admin.name}")
+
+    try:
+        chain = json.loads(gp.approver_chain)
+    except Exception:
+        chain = []
+
+    now = datetime.datetime.utcnow().isoformat()
+    if action == "APPROVE":
+        for step in chain:
+            if step.get("status") in ("PENDING", "ACTIVE"):
+                step["status"] = "APPROVED"
+                step["timestamp"] = now
+                step["approved_by"] = f"{admin.name} (Admin/Principal)"
+                step["note"] = note
+        gp.status = "APPROVED"
+    elif action == "REJECT":
+        for step in chain:
+            if step.get("status") in ("PENDING", "ACTIVE"):
+                step["status"] = "REJECTED"
+                step["timestamp"] = now
+                step["note"] = note
+        gp.status = "REJECTED"
+
+    gp.approver_chain = json.dumps(chain)
+    db.commit()
+    return {"status": "success", "gatepass_id": gp.id, "new_status": gp.status}
+

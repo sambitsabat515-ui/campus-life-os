@@ -21,6 +21,7 @@ from app.api.routes_voice import router as voice_router
 from app.api.routes_sms import router as sms_router
 from app.api.routes_map import router as map_router
 from app.api.routes_ask import router as ask_router
+from app.api.routes_timetable import router as timetable_router
 
 # ================= STRUCTURED LOGGING WITH PII REDACTION =================
 class SensitiveDataFilter(logging.Filter):
@@ -170,6 +171,7 @@ app.include_router(voice_router)
 app.include_router(sms_router)
 app.include_router(map_router)
 app.include_router(ask_router)
+app.include_router(timetable_router)
 
 @app.on_event("startup")
 def on_startup():

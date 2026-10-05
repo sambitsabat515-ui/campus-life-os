@@ -75,12 +75,45 @@ export const api = {
     }),
   markAttendance: (data) =>
     request('/staff/attendance/mark', { method: 'POST', body: JSON.stringify(data) }),
-  getStaffStudents: () => request('/staff/students'),
+  markAttendanceBulk: (data) =>
+    request('/staff/attendance/mark-bulk', { method: 'POST', body: JSON.stringify(data) }),
+  checkAttendanceCommitted: (course_id, session_date) =>
+    request(`/staff/attendance/check?course_id=${encodeURIComponent(course_id)}&session_date=${session_date}`),
+  getStaffStudents: (branch, year) => {
+    const params = new URLSearchParams();
+    if (branch) params.append('branch', branch);
+    if (year) params.append('year', year);
+    const qs = params.toString();
+    return request(`/staff/students${qs ? '?' + qs : ''}`);
+  },
   getStaffGatePassQueue: () => request('/staff/gatepass/queue'),
   actOnGatePass: (id, action, note) =>
     request(`/staff/gatepass/${id}/action`, {
       method: 'POST',
       body: JSON.stringify({ action, note })
+    }),
+  escalateGatePass: (id) =>
+    request(`/staff/gatepass/${id}/escalate`, { method: 'POST' }),
+
+  // Timetable (Staff CRUD + Admin Workload)
+  getTimetableSlots: (batch, day) => {
+    const params = new URLSearchParams();
+    if (batch) params.append('batch', batch);
+    if (day) params.append('day', day);
+    const qs = params.toString();
+    return request(`/timetable/slots${qs ? '?' + qs : ''}`);
+  },
+  createTimetableSlot: (data) =>
+    request('/timetable/slots', { method: 'POST', body: JSON.stringify(data) }),
+  updateTimetableSlot: (id, data) =>
+    request(`/timetable/slots/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteTimetableSlot: (id) =>
+    request(`/timetable/slots/${id}`, { method: 'DELETE' }),
+  getStaffWorkload: () => request('/timetable/staff-workload'),
+  reassignSlot: (slot_id, instructor_name) =>
+    request(`/timetable/slots/${slot_id}/reassign`, {
+      method: 'PUT',
+      body: JSON.stringify({ instructor_name })
     }),
 
   // Admin
@@ -98,6 +131,17 @@ export const api = {
     request(`/admin/certificates/${id}/status`, {
       method: 'PUT',
       body: JSON.stringify({ status })
+    }),
+  importStudents: (students) =>
+    request('/admin/migration/import-students', {
+      method: 'POST',
+      body: JSON.stringify({ students })
+    }),
+  getAdminEscalatedGatePasses: () => request('/admin/gatepass/escalated'),
+  actOnGatePassAdmin: (id, action, note) =>
+    request(`/admin/gatepass/${id}/action`, {
+      method: 'POST',
+      body: JSON.stringify({ action, note })
     }),
 
   // Mess
