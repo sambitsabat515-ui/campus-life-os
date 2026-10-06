@@ -10,7 +10,9 @@ export function AppProvider({ children }) {
   });
 
   const [language, setLanguageState] = useState(() => {
-    return localStorage.getItem('campus_os_lang') || 'en';
+    // Always boot in English — clear any previously saved language preference
+    localStorage.setItem('campus_os_lang', 'en');
+    return 'en';
   });
 
   const [viewportMode, setViewportMode] = useState('auto'); // auto, mobile, desktop

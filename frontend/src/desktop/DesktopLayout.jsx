@@ -31,12 +31,14 @@ export default function DesktopLayout({
   };
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh', backgroundColor: 'var(--color-surface-bg)' }}>
+    <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--bg-gradient)' }}>
       {/* Desktop Sidebar (Section 2 Constraint 6) */}
       <aside style={{
         width: '260px',
-        backgroundColor: '#FFFFFF',
-        borderRight: '1px solid var(--color-neutral-light)',
+        background: 'rgba(255,255,255,0.70)',
+        backdropFilter: 'blur(20px) saturate(160%)',
+        WebkitBackdropFilter: 'blur(20px) saturate(160%)',
+        borderRight: '1px solid rgba(255,255,255,0.60)',
         display: 'flex',
         flexDirection: 'column',
         justifyContent: 'space-between',
@@ -44,7 +46,7 @@ export default function DesktopLayout({
         position: 'sticky',
         top: 0,
         height: '100vh',
-        boxShadow: 'var(--shadow-sm)'
+        boxShadow: '2px 0 20px rgba(139,32,114,0.06)'
       }}>
         <div>
           {/* Logo & Brand */}

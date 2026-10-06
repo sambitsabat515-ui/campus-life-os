@@ -18,34 +18,49 @@ const COURSE_OPTIONS = [
   { id: 'EC301', name: 'EC301 - Digital Electronics' },
 ];
 
-// ─── P/A Toggle Switch ───────────────────────────────────────────────────────
-function PATog({ isPresent, onChange }) {
+// ─── P/A Two-Button Selector ─────────────────────────────────────────────────
+// status: null = unset (neutral), 'PRESENT', 'ABSENT'
+function PATog({ status, onSelect }) {
+  const isPresent = status === 'PRESENT';
+  const isAbsent  = status === 'ABSENT';
+
+  const base = {
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    padding: '5px 16px', fontWeight: 800, fontSize: '12px',
+    letterSpacing: '0.6px', cursor: 'pointer', border: 'none',
+    transition: 'all 0.18s ease', minWidth: '42px',
+  };
+
   return (
-    <button
-      onClick={onChange}
-      title={isPresent ? 'Mark Absent' : 'Mark Present'}
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: '6px',
-        padding: '5px 14px',
-        borderRadius: '20px',
-        border: 'none',
-        cursor: 'pointer',
-        fontWeight: 800,
-        fontSize: '13px',
-        letterSpacing: '0.5px',
-        backgroundColor: isPresent ? 'var(--color-semantic-green)' : '#e55',
-        color: '#fff',
-        transition: 'background 0.2s',
-        minWidth: '60px',
-        justifyContent: 'center'
-      }}
-    >
-      {isPresent ? 'P' : 'A'}
-    </button>
+    <div style={{
+      display: 'inline-flex', borderRadius: '20px', overflow: 'hidden',
+      border: '1.5px solid #E8E2DA', boxShadow: '0 1px 3px rgba(0,0,0,0.06)'
+    }}>
+      <button
+        onClick={() => onSelect(isPresent ? null : 'PRESENT')}
+        title="Mark Present"
+        style={{
+          ...base,
+          borderRadius: '20px 0 0 20px',
+          backgroundColor: isPresent ? '#16A34A' : '#F3F4F6',
+          color: isPresent ? '#fff' : '#9CA3AF',
+          borderRight: '1px solid #E8E2DA',
+        }}
+      >P</button>
+      <button
+        onClick={() => onSelect(isAbsent ? null : 'ABSENT')}
+        title="Mark Absent"
+        style={{
+          ...base,
+          borderRadius: '0 20px 20px 0',
+          backgroundColor: isAbsent ? '#DC2626' : '#F3F4F6',
+          color: isAbsent ? '#fff' : '#9CA3AF',
+        }}
+      >A</button>
+    </div>
   );
 }
+
 
 // ─── Gate Pass Escalation Badge ──────────────────────────────────────────────
 function EscalationBadge({ chain = [] }) {
@@ -118,9 +133,9 @@ export default function StaffDashboard() {
       setGatePasses(gpList);
       setSlots(slotList);
 
-      // Init per-student status: default all PRESENT
+      // Init per-student status: default all null (unset = let staff choose)
       const statusMap = {};
-      (sList || []).forEach(s => { statusMap[s.id] = 'PRESENT'; });
+      (sList || []).forEach(s => { statusMap[s.id] = null; });
       setStudents(sList || []);
       setPerStudentStatus(statusMap);
     } catch (e) {
@@ -144,9 +159,9 @@ export default function StaffDashboard() {
         res.records.forEach(r => { map[r.student_id] = r.status; });
         setPerStudentStatus(map);
       } else {
-        // Reset all to PRESENT
+        // Reset all to null (unset) for fresh marking
         const map = {};
-        students.forEach(s => { map[s.id] = 'PRESENT'; });
+        students.forEach(s => { map[s.id] = null; });
         setPerStudentStatus(map);
       }
     } catch {
@@ -161,11 +176,8 @@ export default function StaffDashboard() {
     if (students.length > 0) checkAttendance();
   }, [selectedCourse, markedDate, students.length]);
 
-  const toggleStudentStatus = (sId) => {
-    setPerStudentStatus(prev => ({
-      ...prev,
-      [sId]: prev[sId] === 'PRESENT' ? 'ABSENT' : 'PRESENT'
-    }));
+  const toggleStudentStatus = (sId, newStatus) => {
+    setPerStudentStatus(prev => ({ ...prev, [sId]: newStatus }));
   };
 
   const markAllPresent = () => {
@@ -183,10 +195,11 @@ export default function StaffDashboard() {
   const handleMarkAttendance = async () => {
     setAttSaving(true);
     try {
-      const attendance = students.map(s => ({
-        student_id: s.id,
-        status: perStudentStatus[s.id] || 'ABSENT'
-      }));
+      // Use students array as source of truth; skip any student still unset
+      // (the UI gate prevents reaching here with unset students, but guard defensively)
+      const attendance = students
+        .filter(s => perStudentStatus[s.id] === 'PRESENT' || perStudentStatus[s.id] === 'ABSENT')
+        .map(s => ({ student_id: s.id, status: perStudentStatus[s.id] }));
       await api.markAttendanceBulk({
         course_id: selectedCourse,
         session_date: markedDate,
@@ -287,8 +300,9 @@ export default function StaffDashboard() {
   };
 
   // ── Helpers ────────────────────────────────────────────────────────────────
+  // Only count explicit marks — unset (null/undefined) students are excluded from both
   const presentCount = students.filter(s => perStudentStatus[s.id] === 'PRESENT').length;
-  const absentCount = students.length - presentCount;
+  const absentCount  = students.filter(s => perStudentStatus[s.id] === 'ABSENT').length;
 
   const tabStyle = (name) => ({
     display: 'flex', alignItems: 'center', gap: '6px',
@@ -559,13 +573,18 @@ export default function StaffDashboard() {
               </div>
             )}
             {!attLoading && students.map(st => {
-              const isPresent = (perStudentStatus[st.id] || 'ABSENT') === 'PRESENT';
+              const status = perStudentStatus[st.id] ?? null;
+              const isPresent = status === 'PRESENT';
+              const isAbsent  = status === 'ABSENT';
+              const isUnset   = status === null;
               return (
                 <div key={st.id} style={{
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                   padding: '10px 14px', borderRadius: 'var(--radius-sm)',
-                  backgroundColor: isPresent ? 'rgba(34,197,94,0.07)' : 'rgba(239,68,68,0.05)',
-                  border: `1.5px solid ${isPresent ? 'var(--color-semantic-green)' : '#e55'}`,
+                  backgroundColor: isUnset
+                    ? 'rgba(107,114,128,0.04)'
+                    : isPresent ? 'rgba(34,197,94,0.07)' : 'rgba(239,68,68,0.05)',
+                  border: `1.5px solid ${isUnset ? '#E8E2DA' : isPresent ? 'var(--color-semantic-green)' : '#DC2626'}`,
                   transition: 'all 0.2s'
                 }}>
                   <div>
@@ -576,15 +595,19 @@ export default function StaffDashboard() {
                       {st.branch} {st.year && `• Year ${st.year}`} {st.hostel && `• ${st.hostel}`} {st.room && `Rm ${st.room}`}
                     </div>
                   </div>
-                  <PATog isPresent={isPresent} onChange={() => toggleStudentStatus(st.id)} />
+                  <PATog status={status} onSelect={(newStatus) => toggleStudentStatus(st.id, newStatus)} />
                 </div>
               );
             })}
           </div>
 
-          <button onClick={handleMarkAttendance} disabled={attSaving || students.length === 0} className="btn-primary"
+          <button onClick={handleMarkAttendance}
+            disabled={attSaving || students.length === 0 || Object.values(perStudentStatus).some(s => s === null)}
+            className="btn-primary"
             style={{ width: 'auto', padding: '12px 28px', fontSize: '14px' }}>
-            {attSaving ? 'Saving…' : attCommitted ? '↺ Update Attendance' : `Commit Attendance (${presentCount}P / ${absentCount}A)`}
+            {attSaving ? 'Saving…' : Object.values(perStudentStatus).some(s => s === null)
+              ? `⚠ Mark all students first (${Object.values(perStudentStatus).filter(s => s === null).length} unset)`
+              : attCommitted ? '↺ Update Attendance' : `Commit Attendance (${presentCount}P / ${absentCount}A)`}
           </button>
         </div>
       )}

@@ -173,12 +173,11 @@ export default function App() {
     </div>
   );
 
-  // If Mobile Viewport Mode Selected
   if (viewportMode === 'mobile') {
     return (
       <div style={{
         minHeight: '100vh',
-        backgroundColor: '#E2E8F0',
+        background: 'linear-gradient(160deg, #FAF7F4 0%, #F5F0E8 50%, #EDE7DA 100%)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -190,12 +189,14 @@ export default function App() {
           maxWidth: '430px',
           height: '880px',
           maxHeight: '92vh',
-          backgroundColor: '#FFFFFF',
-          borderRadius: '40px',
-          boxShadow: '0 25px 60px rgba(0,0,0,0.3)',
+          background: 'rgba(255,255,255,0.82)',
+          backdropFilter: 'blur(20px) saturate(160%)',
+          WebkitBackdropFilter: 'blur(20px) saturate(160%)',
+          borderRadius: '44px',
+          boxShadow: '0 32px 80px rgba(139,32,114,0.18), 0 8px 24px rgba(0,0,0,0.10), inset 0 1px 0 rgba(255,255,255,0.9)',
           overflowY: 'auto',
           position: 'relative',
-          border: '12px solid #1E293B',
+          border: '10px solid #2D1B2E',
           paddingBottom: '80px'
         }}>
           {renderPortalContent()}

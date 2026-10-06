@@ -1,17 +1,24 @@
 :root {
-  /* Brand Tokens (Section 3) */
+  /* ── Brand Tokens — Campus Life OS Purple ── */
   --color-primary: #8B2072;
   --color-primary-hover: #73185D;
   --color-primary-light: #F7EAF4;
   --color-primary-border: #E5B4D9;
-  
-  --color-neutral-mid: #949494;
-  --color-ink: #000000;
-  --color-neutral-light: #D9D9D9;
-  --color-surface-bg: #F8F9FA;
-  --color-card-bg: #FFFFFF;
-  
-  /* Semantic Tokens */
+
+  /* ── Medisphere-inspired Warm Luxury Surface ── */
+  --color-surface-bg: #FAF7F4;           /* warm cream page bg */
+  --color-surface-alt: #F5F0E8;          /* slightly deeper warm tone */
+  --color-card-bg: rgba(255,255,255,0.72); /* glassmorphism card */
+  --color-card-border: rgba(255,255,255,0.82);
+  --color-card-shadow: 0 16px 48px rgba(139,32,114,0.10), 0 2px 8px rgba(0,0,0,0.04), inset 0 1px 0 rgba(255,255,255,0.7);
+
+  /* ── Neutrals ── */
+  --color-ink: #1C1917;                  /* warm charcoal instead of pure black */
+  --color-ink-soft: #44403C;             /* secondary text */
+  --color-neutral-mid: #9CA3AF;          /* muted labels */
+  --color-neutral-light: #E8E2DA;        /* warm-tinted dividers */
+
+  /* ── Semantic Tokens ── */
   --color-semantic-red: #DC2626;
   --color-semantic-red-bg: #FEF2F2;
   --color-semantic-green: #16A34A;
@@ -20,25 +27,33 @@
   --color-semantic-amber-bg: #FFFBEB;
   --color-semantic-blue: #2563EB;
   --color-semantic-blue-bg: #EFF6FF;
+  --color-neutral-state: #6B7280;        /* neutral/unset state */
+  --color-neutral-state-bg: #F3F4F6;
 
-  /* Typography */
+  /* ── Typography ── */
   --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
 
-  /* Shadows & Radius */
-  --radius-sm: 8px;
-  --radius-md: 14px;
-  --radius-lg: 20px;
+  /* ── Radius ── */
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --radius-xl: 32px;
   --radius-full: 9999px;
-  
-  --shadow-sm: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
-  --shadow-md: 0 4px 14px rgba(139, 32, 114, 0.08), 0 2px 6px rgba(0,0,0,0.04);
-  --shadow-lg: 0 10px 25px rgba(139, 32, 114, 0.12), 0 4px 10px rgba(0,0,0,0.03);
-  --shadow-glow: 0 0 20px rgba(139, 32, 114, 0.35);
 
-  /* Transitions */
+  /* ── Shadows ── */
+  --shadow-sm: 0 1px 4px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 6px 20px rgba(139,32,114,0.09), 0 2px 6px rgba(0,0,0,0.04);
+  --shadow-lg: 0 16px 40px rgba(139,32,114,0.13), 0 4px 12px rgba(0,0,0,0.05);
+  --shadow-glow: 0 0 24px rgba(139,32,114,0.35);
+  --shadow-glass: 0 16px 48px rgba(139,32,114,0.10), inset 0 1px 0 rgba(255,255,255,0.7);
+
+  /* ── Transitions ── */
   --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-normal: 250ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-normal: 280ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* ── Background gradient (page-level) ── */
+  --bg-gradient: linear-gradient(160deg, #FAF7F4 0%, #F5F0E8 50%, #EDE7DA 100%);
 }
 
 /* Low-Bandwidth Mode overrides (Section 10) */
@@ -63,7 +78,8 @@ body.low-bandwidth-mode * {
 
 body {
   font-family: var(--font-sans);
-  background-color: var(--color-surface-bg);
+  background: var(--bg-gradient);
+  min-height: 100vh;
   color: var(--color-ink);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -114,11 +130,11 @@ input, textarea, select {
   display: block;
 }
 
-/* Primary Button */
+/* ── Primary Button — luxury gradient ── */
 .btn-primary {
-  background-color: var(--color-primary);
+  background: linear-gradient(135deg, var(--color-primary) 0%, #A0266A 100%);
   color: #FFFFFF;
-  padding: 14px 24px;
+  padding: 13px 24px;
   border-radius: var(--radius-md);
   font-size: 15px;
   font-weight: 600;
@@ -126,23 +142,30 @@ input, textarea, select {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  transition: background-color var(--transition-fast), transform var(--transition-fast);
+  box-shadow: 0 8px 20px rgba(139,32,114,0.28);
+  transition: all var(--transition-fast);
   width: 100%;
 }
 
 .btn-primary:hover {
-  background-color: var(--color-primary-hover);
+  background: linear-gradient(135deg, var(--color-primary-hover) 0%, #8B2072 100%);
+  box-shadow: 0 10px 28px rgba(139,32,114,0.36);
+  transform: translateY(-1px);
 }
 
 .btn-primary:active {
   transform: scale(0.98);
+  box-shadow: 0 4px 12px rgba(139,32,114,0.2);
 }
 
+/* ── Secondary Button ── */
 .btn-secondary {
-  background-color: var(--color-surface-bg);
+  background: rgba(255,255,255,0.60);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   color: var(--color-ink);
   border: 1px solid var(--color-neutral-light);
-  padding: 12px 20px;
+  padding: 11px 20px;
   border-radius: var(--radius-md);
   font-size: 14px;
   font-weight: 600;
@@ -150,25 +173,31 @@ input, textarea, select {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  transition: background-color var(--transition-fast);
+  transition: all var(--transition-fast);
 }
 
 .btn-secondary:hover {
-  background-color: #ECEEF1;
+  background: rgba(255,255,255,0.85);
+  border-color: var(--color-primary-border);
+  color: var(--color-primary);
 }
 
-/* Category Accent Card (Section 3 pattern) */
+/* ── Category Accent Card — glassmorphism ── */
 .category-card {
-  background: var(--color-card-bg);
+  background: rgba(255,255,255,0.65);
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
   border-radius: var(--radius-md);
   padding: 16px;
   border-left: 5px solid var(--color-primary);
-  box-shadow: var(--shadow-sm);
+  border-top: 1px solid rgba(255,255,255,0.80);
+  box-shadow: var(--shadow-glass);
   transition: transform var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .category-card:hover {
-  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
 }
 
 .category-card.cat-plumbing { border-left-color: #2563EB; }
